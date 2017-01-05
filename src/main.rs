@@ -40,6 +40,7 @@ enum Op {
     JZ,
     JNZ,
     Set,
+    CMul,
 }
 
 fn opcode(c: char) -> Option<Op> {
@@ -154,23 +155,73 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
     // decreases the value, then it zeroes the cell.
     //
     // Examples: [-], [+], [--+]
-    let mut delta: i32 = 0;
-    for i in start + 1..code.len() - 1 {
-        match code[i].opcode {
-            Op::Add => delta += 1,
-            Op::Sub => delta -= 1,
+    let set_zero = || {
+        let mut delta: i32 = 0;
+        for i in start + 1..code.len() - 1 {
+            match code[i].opcode {
+                Op::Add => delta += 1,
+                Op::Sub => delta -= 1,
+                _ => return None,
+            }
+        }
+        if delta != 0 {
+            Some(vec![Instr {
+                          opcode: Op::Set,
+                          arg: 0,
+                          index: 0,
+                      }])
+        } else {
+            None
+        }
+    };
+
+    // If a loop is of the form [->+<], it copies a value from one
+    // cell to toe next. Multiple cells could be copied in to. The
+    // copying may also have a multiplicative factor.
+    let copy_multiply = || {
+        if code.len() <= start + 2 {
+            return None;
+        }
+
+        // The first instruction in the loop body is a -
+        match code[start + 1] {
+            Instr { opcode: Op::Sub, arg: 1, index: 0 } => {}
             _ => return None,
         }
-    }
-    if delta != 0 {
-        Some(vec![Instr {
-                      opcode: Op::Set,
-                      arg: 0,
-                      index: 0,
-                  }])
-    } else {
-        None
-    }
+
+        // And the rest of the loop is sections of the form ">m+n",
+        // followed by enough <s to bring back to the original cell.
+        let mut deltas = Vec::new();
+        let mut off = 0;
+        for i in start + 2..code.len() - 1 {
+            match code[i].opcode {
+                Op::Right => off += code[i].arg,
+                Op::Left if off >= code[i].arg => off -= code[i].arg,
+                Op::Add if off != 0 => deltas.push((code[i].arg, off)),
+                _ => return None,
+            }
+        }
+        if off != 0 {
+            return None;
+        }
+
+        let mut instrs = Vec::new();
+        for (del, off) in deltas {
+            instrs.push(Instr {
+                opcode: Op::CMul,
+                arg: del,
+                index: off as usize,
+            });
+        }
+        instrs.push(Instr {
+            opcode: Op::Set,
+            arg: 0,
+            index: 0,
+        });
+        Some(instrs)
+    };
+
+    set_zero().or(copy_multiply())
 }
 
 fn run(code: Vec<Instr>) {
@@ -215,15 +266,19 @@ fn run(code: Vec<Instr>) {
             Op::JZ => {
                 if memory[dp] == 0 {
                     ip = instr.index
-                };
+                }
             }
             Op::JNZ => {
                 if memory[dp] != 0 {
                     ip = instr.index
-                };
+                }
             }
             Op::Set => {
                 memory[dp] = instr.arg;
+            }
+            Op::CMul => {
+                memory[dp + instr.index] = memory[dp + instr.index]
+                    .wrapping_add(memory[dp].wrapping_mul(instr.arg));
             }
         }
         ip += 1;
