@@ -25,7 +25,7 @@ fn main() {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Instr {
     opcode: Op,
-    ntimes: u8,
+    arg: u8,
     index: usize,
 }
 
@@ -39,6 +39,7 @@ enum Op {
     GetCh,
     JZ,
     JNZ,
+    Set,
 }
 
 fn opcode(c: char) -> Option<Op> {
@@ -89,7 +90,7 @@ fn compile(code: String) -> Option<Vec<Instr>> {
                 Op::JZ => {
                     instrs.push(Instr {
                         opcode: Op::JZ,
-                        ntimes: 0,
+                        arg: 0,
                         index: 0,
                     });
                     jumps.push(instrs.len() - 1);
@@ -103,18 +104,51 @@ fn compile(code: String) -> Option<Vec<Instr>> {
                         Some(start) => {
                             instrs.push(Instr {
                                 opcode: Op::JNZ,
-                                ntimes: 0,
+                                arg: 0,
                                 index: start,
                             });
                             instrs[start].index = instrs.len() - 1;
+                            if let Some(mut optimised) = optimise_loop(&instrs, start) {
+                                instrs.truncate(start);
+                                instrs.append(&mut optimised);
+                            }
                         }
                         None => return None,
                     }
                 }
+
+                // The other opcodes only show up as a result of
+                // optimisation, they shouldn't be returned by the
+                // opcode function.
+                _ => panic!("Unexpected opcode: {:?}", op),
             }
         }
     }
     if jumps.len() == 0 { Some(instrs) } else { None }
+}
+
+fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
+    // If a loop only touches one cell and (overall) increases or
+    // decreases the value, then it zeroes the cell.
+    //
+    // Examples: [-], [+], [--+]
+    let mut delta: i32 = 0;
+    for i in start + 1..code.len() - 1 {
+        match code[i].opcode {
+            Op::Add => delta += 1,
+            Op::Sub => delta -= 1,
+            _ => return None,
+        }
+    }
+    if delta != 0 {
+        Some(vec![Instr {
+                      opcode: Op::Set,
+                      arg: 0,
+                      index: 0,
+                  }])
+    } else {
+        None
+    }
 }
 
 fn run(code: Vec<Instr>) {
@@ -126,19 +160,19 @@ fn run(code: Vec<Instr>) {
         let instr = code[ip];
         match instr.opcode {
             Op::Add => {
-                memory[dp] = memory[dp].wrapping_add(instr.ntimes);
+                memory[dp] = memory[dp].wrapping_add(instr.arg);
             }
             Op::Sub => {
-                memory[dp] = memory[dp].wrapping_sub(instr.ntimes);
+                memory[dp] = memory[dp].wrapping_sub(instr.arg);
             }
             Op::Left => {
-                dp = dp.saturating_sub(instr.ntimes as usize);
+                dp = dp.saturating_sub(instr.arg as usize);
             }
             Op::Right => {
-                dp = dp.saturating_add(instr.ntimes as usize);
+                dp = dp.saturating_add(instr.arg as usize);
             }
             Op::PutCh => {
-                for _ in 0..instr.ntimes {
+                for _ in 0..instr.arg {
                     print!("{}", memory[dp] as char);
                 }
             }
@@ -146,7 +180,7 @@ fn run(code: Vec<Instr>) {
                 // Only the last character input will be kept, but
                 // only asking for one character would change the
                 // program semantics.
-                for _ in 0..instr.ntimes {
+                for _ in 0..instr.arg {
                     let inp: Option<u8> = std::io::stdin()
                         .bytes()
                         .next()
@@ -165,6 +199,9 @@ fn run(code: Vec<Instr>) {
                 if memory[dp] != 0 {
                     ip = instr.index
                 };
+            }
+            Op::Set => {
+                memory[dp] = instr.arg;
             }
         }
         ip += 1;
