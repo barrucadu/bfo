@@ -139,6 +139,13 @@ fn compile(code: String) -> Option<Vec<Instr>> {
             }
         }
     }
+    if let Some(acc_op) = accumulating {
+        instrs.push(Instr {
+            opcode: acc_op,
+            arg: accumulated,
+            index: 0,
+        });
+    }
     if jumps.len() == 0 { Some(instrs) } else { None }
 }
 
