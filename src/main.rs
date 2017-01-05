@@ -67,11 +67,26 @@ fn compile(code: String) -> Option<Vec<Instr>> {
             // the operation, store the squahed one.
             if let Some(acc_op) = accumulating {
                 if acc_op != op || accumulated == 255 {
-                    instrs.push(Instr {
+                    let acc_instr = Instr {
                         opcode: acc_op,
-                        ntimes: accumulated,
+                        arg: accumulated,
                         index: 0,
-                    });
+                    };
+                    if instrs.len() > 0 {
+                        let prior_idx = instrs.len() - 1;
+                        let prior: Instr = instrs[prior_idx];
+                        match (prior.opcode, acc_op) {
+                            (Op::Set, Op::Add) => {
+                                instrs[prior_idx].arg = prior.arg.wrapping_add(accumulated)
+                            }
+                            (Op::Set, Op::Sub) => {
+                                instrs[prior_idx].arg = prior.arg.wrapping_sub(accumulated)
+                            }
+                            _ => instrs.push(acc_instr),
+                        };
+                    } else {
+                        instrs.push(acc_instr);
+                    }
                     accumulating = None;
                     accumulated = 0;
                 }
