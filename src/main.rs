@@ -26,7 +26,7 @@ fn main() {
 struct Instr {
     opcode: Op,
     arg: u8,
-    index: usize,
+    off: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -75,7 +75,7 @@ fn compile(code: String) -> Option<Vec<Instr>> {
                     let acc_instr = Instr {
                         opcode: acc_op,
                         arg: accumulated,
-                        index: 0,
+                        off: 0,
                     };
                     if instrs.len() > 0 {
                         let prior_idx = instrs.len() - 1;
@@ -111,7 +111,7 @@ fn compile(code: String) -> Option<Vec<Instr>> {
                     instrs.push(Instr {
                         opcode: Op::JZ,
                         arg: 0,
-                        index: 0,
+                        off: 0,
                     });
                     jumps.push(instrs.len() - 1);
                 }
@@ -122,12 +122,13 @@ fn compile(code: String) -> Option<Vec<Instr>> {
                 Op::JNZ => {
                     match jumps.pop() {
                         Some(start) => {
+                            let off = start as i32 - instrs.len() as i32;
                             instrs.push(Instr {
                                 opcode: Op::JNZ,
                                 arg: 0,
-                                index: start,
+                                off: off,
                             });
-                            instrs[start].index = instrs.len() - 1;
+                            instrs[start].off = -off;
                             if let Some(mut optimised) = optimise_loop(&instrs, start) {
                                 instrs.truncate(start);
                                 instrs.append(&mut optimised);
@@ -148,7 +149,7 @@ fn compile(code: String) -> Option<Vec<Instr>> {
         instrs.push(Instr {
             opcode: acc_op,
             arg: accumulated,
-            index: 0,
+            off: 0,
         });
     }
     if jumps.len() == 0 { Some(instrs) } else { None }
@@ -172,7 +173,7 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
             Some(vec![Instr {
                           opcode: Op::Set,
                           arg: 0,
-                          index: 0,
+                          off: 0,
                       }])
         } else {
             None
@@ -188,13 +189,13 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
         }
 
         let mut fst_del: i32 = 0;
-        let mut deltas: Vec<(i32, u8)> = Vec::new();
-        let mut off = 0;
+        let mut deltas: Vec<(i32, i32)> = Vec::new();
+        let mut off: i32 = 0;
         for i in start + 1..code.len() - 1 {
             match code[i].opcode {
                 // Moving right and left changes the cell offset.
-                Op::Right => off += code[i].arg,
-                Op::Left if off >= code[i].arg => off -= code[i].arg,
+                Op::Right => off += code[i].arg as i32,
+                Op::Left if off >= code[i].arg as i32 => off -= code[i].arg as i32,
                 // Adding to a nn-first cell adds a multiplicative factor.
                 Op::Add if off != 0 => deltas.push((code[i].arg as i32, off)),
                 Op::Sub if off != 0 => deltas.push((-(code[i].arg as i32), off)),
@@ -220,13 +221,13 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
             instrs.push(Instr {
                 opcode: if del < 0 { Op::CNMul } else { Op::CMul },
                 arg: if del < 0 { -del } else { del } as u8,
-                index: off as usize,
+                off: off,
             });
         }
         instrs.push(Instr {
             opcode: Op::Set,
             arg: 0,
-            index: 0,
+            off: 0,
         });
         Some(instrs)
     };
@@ -243,14 +244,14 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
                 Some(vec![Instr {
                               opcode: Op::SeekL,
                               arg: 0,
-                              index: 0,
+                              off: 0,
                           }])
             }
             Op::Right if code[start + 1].arg == 1 => {
                 Some(vec![Instr {
                               opcode: Op::SeekR,
                               arg: 0,
-                              index: 0,
+                              off: 0,
                           }])
             }
             _ => None,
@@ -278,14 +279,14 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
                 // If it's a set 0, omit the jump, as we leave the
                 // loop here (an unconditional jump to the same place
                 // would also work, but be one extra instruction).
-                instrs[0].index -= 2;
+                instrs[0].off -= 2;
             } else {
                 // If it's a set !0, unconditional jump to the start
                 // of the loop.
                 instrs.push(Instr {
                     opcode: Op::J,
                     arg: 0,
-                    index: code[code.len() - 1].index,
+                    off: code[code.len() - 1].off,
                 });
             }
 
@@ -337,27 +338,27 @@ fn run(code: Vec<Instr>) {
                     }
                 }
             }
-            Op::J => ip = instr.index,
+            Op::J => ip = (ip as i32 + instr.off) as usize,
             Op::JZ => {
                 if memory[dp] == 0 {
-                    ip = instr.index
+                    ip = (ip as i32 + instr.off) as usize
                 }
             }
             Op::JNZ => {
                 if memory[dp] != 0 {
-                    ip = instr.index
+                    ip = (ip as i32 + instr.off) as usize
                 }
             }
             Op::Set => {
                 memory[dp] = instr.arg;
             }
             Op::CMul => {
-                memory[dp + instr.index] = memory[dp + instr.index]
-                    .wrapping_add(memory[dp].wrapping_mul(instr.arg));
+                let tgt = (dp as i32 + instr.off) as usize;
+                memory[tgt] = memory[tgt].wrapping_add(memory[dp].wrapping_mul(instr.arg));
             }
             Op::CNMul => {
-                memory[dp + instr.index] = memory[dp + instr.index]
-                    .wrapping_sub(memory[dp].wrapping_mul(instr.arg));
+                let tgt = (dp as i32 + instr.off) as usize;
+                memory[tgt] = memory[tgt].wrapping_sub(memory[dp].wrapping_mul(instr.arg));
             }
             Op::SeekL => {
                 while memory[dp] > 0 {
