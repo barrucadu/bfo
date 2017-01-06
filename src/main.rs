@@ -176,32 +176,37 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
     };
 
     // If a loop is of the form [->+<], it copies a value from one
-    // cell to toe next. Multiple cells could be copied in to. The
+    // cell to the next. Multiple cells could be copied in to. The
     // copying may also have a multiplicative factor.
     let copy_multiply = || {
         if code.len() <= start + 2 {
             return None;
         }
 
-        // The first instruction in the loop body is a -
-        match code[start + 1] {
-            Instr { opcode: Op::Sub, arg: 1, index: 0 } => {}
-            _ => return None,
-        }
-
-        // And the rest of the loop is sections of the form ">m+n",
-        // followed by enough <s to bring back to the original cell.
+        let mut fst_del: i32 = 0;
         let mut deltas = Vec::new();
         let mut off = 0;
-        for i in start + 2..code.len() - 1 {
+        for i in start + 1..code.len() - 1 {
             match code[i].opcode {
+                // Moving right and left changes the cell offset.
                 Op::Right => off += code[i].arg,
                 Op::Left if off >= code[i].arg => off -= code[i].arg,
+                // Adding to a nn-first cell adds a multiplicative factor.
                 Op::Add if off != 0 => deltas.push((code[i].arg, off)),
+                // Adding or subtracting from the initial cell updates its delta.
+                Op::Add if off == 0 => fst_del += code[i].arg as i32,
+                Op::Sub if off == 0 => fst_del -= code[i].arg as i32,
                 _ => return None,
             }
         }
+
+        // Final offset must be 0, or we haven't returned to the initial cell.
         if off != 0 {
+            return None;
+        }
+
+        // Final delta of the original cell must be -1.
+        if fst_del != -1 {
             return None;
         }
 
