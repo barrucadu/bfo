@@ -1,7 +1,10 @@
+extern crate memchr;
+
 use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use memchr::*;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Options {
@@ -27,7 +30,7 @@ fn main() {
         fuse_set_add: true,
         loop_set_zero: true,
         loop_copy_multiply: true,
-        loop_seek_lr: false,
+        loop_seek_lr: true,
         loop_set_jump: true,
     };
 
@@ -343,9 +346,11 @@ fn optimise_loop(code: &Vec<Instr>, start: usize, opts: Options) -> Option<Vec<I
     set_zero().or(copy_multiply().or(seek_lr().or(set_jump())))
 }
 
+const MEM_SIZE: usize = 30000;
+
 fn run(code: Vec<Instr>) {
     let mut ip = 0;
-    let mut memory: [u8; 30000] = [0; 30000];
+    let mut memory: [u8; MEM_SIZE] = [0; MEM_SIZE];
     let mut dp = 0;
 
     while ip < code.len() {
@@ -407,14 +412,29 @@ fn run(code: Vec<Instr>) {
                 memory[tgt] = memory[tgt].wrapping_sub(memory[dp].wrapping_mul(instr.arg));
             }
             Op::SeekL => {
-                while memory[dp] > 0 {
-                    dp -= 1;
+                #[cfg(target_os = "linux")]
+                fn seekl(memory: &[u8], dp: usize) -> usize {
+                    // On Linux we can use memrchr for this.
+                    let (fst, _) = memory.split_at(dp);
+                    memrchr(0, &fst).unwrap_or(0)
                 }
+
+                #[cfg(not(target_os = "linux"))]
+                fn seekl(memory: &[u8], dp: usize) -> usize {
+                    // But that's a GNU extension, so elsewhere we just have to
+                    // iterate.
+                    let mut new_dp = dp;
+                    while memory[new_dp] > 0 {
+                        new_dp -= 1;
+                    }
+                    new_dp
+                }
+
+                dp = seekl(&memory, dp);
             }
             Op::SeekR => {
-                while memory[dp] > 0 {
-                    dp += 1;
-                }
+                let (_, snd) = memory.split_at(dp);
+                dp += memchr(0, &snd).unwrap_or(MEM_SIZE - dp);
             }
         }
         ip += 1;
