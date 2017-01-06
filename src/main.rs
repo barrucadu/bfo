@@ -379,6 +379,8 @@ fn run(code: Vec<Instr>) {
                         .and_then(|result| result.ok());
                     if let Some(inp_u8) = inp {
                         memory[dp] = inp_u8;
+                    } else {
+                        memory[dp] = 0;
                     }
                 }
             }
