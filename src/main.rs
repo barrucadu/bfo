@@ -3,12 +3,40 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct Options {
+    // Fuse adjacent equal operations.
+    fuse_adjacent: bool,
+    // Fuse set/{add,sub} pairs.
+    fuse_set_add: bool,
+    // Compress set-zero loops into a single instruction.
+    loop_set_zero: bool,
+    // Compress copy/multiply loops into a sequence of copy/multiply
+    // instructions.
+    loop_copy_multiply: bool,
+    // Compress left/right-seek loops into a single instruction.
+    loop_seek_lr: bool,
+    // Use a set before the sart or end of a loop to change the
+    // condition.
+    loop_set_jump: bool,
+}
+
 fn main() {
+    let opts = Options {
+        fuse_adjacent: true,
+        fuse_set_add: true,
+        loop_set_zero: true,
+        loop_copy_multiply: true,
+        loop_seek_lr: false,
+        loop_set_jump: true,
+    };
+
+
     if let Some(fname) = env::args().nth(1) {
         if let Ok(mut file) = File::open(Path::new(&fname)) {
             let mut code = String::new();
             if file.read_to_string(&mut code).is_ok() {
-                if let Some(compiled) = compile(code) {
+                if let Some(compiled) = compile(code, opts) {
                     run(compiled);
                 } else {
                     println!("ERROR: could not compile code (are your brackets matched?");
@@ -61,7 +89,7 @@ fn opcode(c: char) -> Option<Op> {
     }
 }
 
-fn compile(code: String) -> Option<Vec<Instr>> {
+fn compile(code: String, opts: Options) -> Option<Vec<Instr>> {
     let mut instrs = Vec::new();
     let mut jumps = Vec::new();
     let mut accumulating = None;
@@ -69,15 +97,15 @@ fn compile(code: String) -> Option<Vec<Instr>> {
     for c in code.chars() {
         if let Some(op) = opcode(c) {
             // If we've squashed some opcodes, and now are changing
-            // the operation, store the squahed one.
+            // the operation, store the squashed one.
             if let Some(acc_op) = accumulating {
-                if acc_op != op || accumulated == 255 {
+                if acc_op != op || accumulated == 255 || !opts.fuse_adjacent {
                     let acc_instr = Instr {
                         opcode: acc_op,
                         arg: accumulated,
                         off: 0,
                     };
-                    if instrs.len() > 0 {
+                    if instrs.len() > 0 && opts.fuse_set_add {
                         let prior_idx = instrs.len() - 1;
                         let prior: Instr = instrs[prior_idx];
                         match (prior.opcode, acc_op) {
@@ -129,7 +157,7 @@ fn compile(code: String) -> Option<Vec<Instr>> {
                                 off: off,
                             });
                             instrs[start].off = -off;
-                            if let Some(mut optimised) = optimise_loop(&instrs, start) {
+                            if let Some(mut optimised) = optimise_loop(&instrs, start, opts) {
                                 instrs.truncate(start);
                                 instrs.append(&mut optimised);
                             }
@@ -155,12 +183,16 @@ fn compile(code: String) -> Option<Vec<Instr>> {
     if jumps.len() == 0 { Some(instrs) } else { None }
 }
 
-fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
+fn optimise_loop(code: &Vec<Instr>, start: usize, opts: Options) -> Option<Vec<Instr>> {
     // If a loop only touches one cell and (overall) increases or
     // decreases the value, then it zeroes the cell.
     //
     // Examples: [-], [+], [--+]
     let set_zero = || {
+        if !opts.loop_set_zero {
+            return None;
+        }
+
         let mut delta: i32 = 0;
         for i in start + 1..code.len() - 1 {
             match code[i].opcode {
@@ -184,6 +216,10 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
     // cell to the next. Multiple cells could be copied in to. The
     // copying may also have a multiplicative factor.
     let copy_multiply = || {
+        if !opts.loop_copy_multiply {
+            return None;
+        }
+
         if code.len() <= start + 2 {
             return None;
         }
@@ -235,6 +271,10 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
     // Replace [<] and [>] with a single "seek left" or "seek right"
     // operation.
     let seek_lr = || {
+        if !opts.loop_seek_lr {
+            return None;
+        }
+
         if code.len() != start + 3 {
             return None;
         }
@@ -261,6 +301,10 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
     // Turn a set followed by a conditional jump into a set followed
     // by an unconditional jump
     let set_jump = || {
+        if !opts.loop_set_jump {
+            return None;
+        }
+
         let before1 = code[start - 1];
         let before2 = code[code.len() - 2];
         if start > 0 && before1.opcode == Op::Set && before1.arg == 0 {
