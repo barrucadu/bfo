@@ -41,6 +41,7 @@ enum Op {
     JNZ,
     Set,
     CMul,
+    CNMul,
 }
 
 fn opcode(c: char) -> Option<Op> {
@@ -184,7 +185,7 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
         }
 
         let mut fst_del: i32 = 0;
-        let mut deltas = Vec::new();
+        let mut deltas: Vec<(i32, u8)> = Vec::new();
         let mut off = 0;
         for i in start + 1..code.len() - 1 {
             match code[i].opcode {
@@ -192,10 +193,11 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
                 Op::Right => off += code[i].arg,
                 Op::Left if off >= code[i].arg => off -= code[i].arg,
                 // Adding to a nn-first cell adds a multiplicative factor.
-                Op::Add if off != 0 => deltas.push((code[i].arg, off)),
+                Op::Add if off != 0 => deltas.push((code[i].arg as i32, off)),
+                Op::Sub if off != 0 => deltas.push((-(code[i].arg as i32), off)),
                 // Adding or subtracting from the initial cell updates its delta.
-                Op::Add if off == 0 => fst_del += code[i].arg as i32,
-                Op::Sub if off == 0 => fst_del -= code[i].arg as i32,
+                Op::Add => fst_del += code[i].arg as i32,
+                Op::Sub => fst_del -= code[i].arg as i32,
                 _ => return None,
             }
         }
@@ -213,8 +215,8 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
         let mut instrs = Vec::new();
         for (del, off) in deltas {
             instrs.push(Instr {
-                opcode: Op::CMul,
-                arg: del,
+                opcode: if del < 0 { Op::CNMul } else { Op::CMul },
+                arg: if del < 0 { -del } else { del } as u8,
                 index: off as usize,
             });
         }
@@ -284,6 +286,10 @@ fn run(code: Vec<Instr>) {
             Op::CMul => {
                 memory[dp + instr.index] = memory[dp + instr.index]
                     .wrapping_add(memory[dp].wrapping_mul(instr.arg));
+            }
+            Op::CNMul => {
+                memory[dp + instr.index] = memory[dp + instr.index]
+                    .wrapping_sub(memory[dp].wrapping_mul(instr.arg));
             }
         }
         ip += 1;
