@@ -42,6 +42,8 @@ enum Op {
     Set,
     CMul,
     CNMul,
+    SeekL,
+    SeekR,
 }
 
 fn opcode(c: char) -> Option<Op> {
@@ -228,7 +230,33 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
         Some(instrs)
     };
 
-    set_zero().or(copy_multiply())
+    // Replace [<] and [>] with a single "seek left" or "seek right"
+    // operation.
+    let seek_lr = || {
+        if code.len() != start + 3 {
+            return None;
+        }
+
+        match code[start + 1].opcode {
+            Op::Left if code[start + 1].arg == 1 => {
+                Some(vec![Instr {
+                              opcode: Op::SeekL,
+                              arg: 0,
+                              index: 0,
+                          }])
+            }
+            Op::Right if code[start + 1].arg == 1 => {
+                Some(vec![Instr {
+                              opcode: Op::SeekR,
+                              arg: 0,
+                              index: 0,
+                          }])
+            }
+            _ => None,
+        }
+    };
+
+    set_zero().or(copy_multiply().or(seek_lr()))
 }
 
 fn run(code: Vec<Instr>) {
@@ -290,6 +318,16 @@ fn run(code: Vec<Instr>) {
             Op::CNMul => {
                 memory[dp + instr.index] = memory[dp + instr.index]
                     .wrapping_sub(memory[dp].wrapping_mul(instr.arg));
+            }
+            Op::SeekL => {
+                while memory[dp] > 0 {
+                    dp -= 1;
+                }
+            }
+            Op::SeekR => {
+                while memory[dp] > 0 {
+                    dp += 1;
+                }
             }
         }
         ip += 1;
