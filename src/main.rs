@@ -37,6 +37,7 @@ enum Op {
     Right,
     PutCh,
     GetCh,
+    J,
     JZ,
     JNZ,
     Set,
@@ -256,7 +257,45 @@ fn optimise_loop(code: &Vec<Instr>, start: usize) -> Option<Vec<Instr>> {
         }
     };
 
-    set_zero().or(copy_multiply().or(seek_lr()))
+    // Turn a set followed by a conditional jump into a set followed
+    // by an unconditional jump
+    let set_jump = || {
+        let before1 = code[start - 1];
+        let before2 = code[code.len() - 2];
+        if start > 0 && before1.opcode == Op::Set && before1.arg == 0 {
+            // Loop opener is JZ, so Set 0; [ ... ] ==> Set 0.
+            Some(vec![])
+        } else if before2.opcode == Op::Set {
+            // Copy the loop body, as we're changing the end.
+            let mut instrs = Vec::new();
+            for i in start..code.len() - 2 {
+                instrs.push(code[i]);
+            }
+
+            // Loop closer jump can be made unconditional if
+            // immediately preceeded by a Set.
+            if before2.arg == 0 {
+                // If it's a set 0, omit the jump, as we leave the
+                // loop here (an unconditional jump to the same place
+                // would also work, but be one extra instruction).
+                instrs[0].index -= 2;
+            } else {
+                // If it's a set !0, unconditional jump to the start
+                // of the loop.
+                instrs.push(Instr {
+                    opcode: Op::J,
+                    arg: 0,
+                    index: code[code.len() - 1].index,
+                });
+            }
+
+            Some(instrs)
+        } else {
+            None
+        }
+    };
+
+    set_zero().or(copy_multiply().or(seek_lr().or(set_jump())))
 }
 
 fn run(code: Vec<Instr>) {
@@ -298,6 +337,7 @@ fn run(code: Vec<Instr>) {
                     }
                 }
             }
+            Op::J => ip = instr.index,
             Op::JZ => {
                 if memory[dp] == 0 {
                     ip = instr.index
